@@ -1,195 +1,454 @@
-<p align="center">
-  <img src="assets/logo.jpg" width="200"/>
-</p>
+# OpenManus 工具调用链插桩说明
 
-English | [中文](README_zh.md) | [한국어](README_ko.md) | [日本語](README_ja.md)
+本说明文档对应当前这版 **OpenManus 插桩补丁** 的真实改动范围，重点是帮助你理解：
 
-[![GitHub stars](https://img.shields.io/github/stars/FoundationAgents/OpenManus?style=social)](https://github.com/FoundationAgents/OpenManus/stargazers)
-&ensp;
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) &ensp;
-[![Discord Follow](https://dcbadge.vercel.app/api/server/DYn29wFk9z?style=flat)](https://discord.gg/DYn29wFk9z)
-[![Demo](https://img.shields.io/badge/Demo-Hugging%20Face-yellow)](https://huggingface.co/spaces/lyh-917/OpenManusDemo)
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.15186407.svg)](https://doi.org/10.5281/zenodo.15186407)
+- 当前到底改了哪些文件
+- 这些改动能支撑哪些 workflow 分析
+- 目前还缺哪些链路
+- 如何把补丁覆盖到现有仓库中
 
-# 👋 OpenManus
+> **注意**
+>
+> 当前版本属于 **工具调用主链插桩**，还不是“完整 agent 内部全链路插桩”。
+>
+> 因此，它适合用于分析 **OpenManus 的工具主导型 workflow**，不建议直接表述为“完整 agent workflow tracing”。
 
-Manus is incredible, but OpenManus can achieve any idea without an *Invite Code* 🛫!
+---
 
-Our team members [@Xinbin Liang](https://github.com/mannaandpoem) and [@Jinyu Xiang](https://github.com/XiangJinyu) (core authors), along with [@Zhaoyang Yu](https://github.com/MoshiQAQ), [@Jiayi Zhang](https://github.com/didiforgithub), and [@Sirui Hong](https://github.com/stellaHSR), we are from [@MetaGPT](https://github.com/geekan/MetaGPT). The prototype is launched within 3 hours and we are keeping building!
+## 一、当前真实改动范围
 
-It's a simple implementation, so we welcome any suggestions, contributions, and feedback!
+当前补丁中，**确认存在实际插桩改动** 的文件如下。
 
-Enjoy your own agent with OpenManus!
+### 1. Agent 主链
 
-We're also excited to introduce [OpenManus-RL](https://github.com/OpenManus/OpenManus-RL), an open-source project dedicated to reinforcement learning (RL)- based (such as GRPO) tuning methods for LLM agents, developed collaboratively by researchers from UIUC and OpenManus.
+- `app/agent/base.py`
+- `app/agent/toolcall.py`
 
-## Project Demo
+### 2. Tool 主链
 
-<video src="https://private-user-images.githubusercontent.com/61239030/420168772-6dcfd0d2-9142-45d9-b74e-d10aa75073c6.mp4?jwt=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3NDEzMTgwNTksIm5iZiI6MTc0MTMxNzc1OSwicGF0aCI6Ii82MTIzOTAzMC80MjAxNjg3NzItNmRjZmQwZDItOTE0Mi00NWQ5LWI3NGUtZDEwYWE3NTA3M2M2Lm1wND9YLUFtei1BbGdvcml0aG09QVdTNC1ITUFDLVNIQTI1NiZYLUFtei1DcmVkZW50aWFsPUFLSUFWQ09EWUxTQTUzUFFLNFpBJTJGMjAyNTAzMDclMkZ1cy1lYXN0LTElMkZzMyUyRmF3czRfcmVxdWVzdCZYLUFtei1EYXRlPTIwMjUwMzA3VDAzMjIzOVomWC1BbXotRXhwaXJlcz0zMDAmWC1BbXotU2lnbmF0dXJlPTdiZjFkNjlmYWNjMmEzOTliM2Y3M2VlYjgyNDRlZDJmOWE3NWZhZjE1MzhiZWY4YmQ3NjdkNTYwYTU5ZDA2MzYmWC1BbXotU2lnbmVkSGVhZGVycz1ob3N0In0.UuHQCgWYkh0OQq9qsUWqGsUbhG3i9jcZDAMeHjLt5T4" data-canonical-src="https://private-user-images.githubusercontent.com/61239030/420168772-6dcfd0d2-9142-45d9-b74e-d10aa75073c6.mp4?jwt=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3NDEzMTgwNTksIm5iZiI6MTc0MTMxNzc1OSwicGF0aCI6Ii82MTIzOTAzMC80MjAxNjg3NzItNmRjZmQwZDItOTE0Mi00NWQ5LWI3NGUtZDEwYWE3NTA3M2M2Lm1wND9YLUFtei1BbGdvcml0aG09QVdTNC1ITUFDLVNIQTI1NiZYLUFtei1DcmVkZW50aWFsPUFLSUFWQ09EWUxTQTUzUFFLNFpBJTJGMjAyNTAzMDclMkZ1cy1lYXN0LTElMkZzMyUyRmF3czRfcmVxdWVzdCZYLUFtei1EYXRlPTIwMjUwMzA3VDAzMjIzOVomWC1BbXotRXhwaXJlcz0zMDAmWC1BbXotU2lnbmF0dXJlPTdiZjFkNjlmYWNjMmEzOTliM2Y3M2VlYjgyNDRlZDJmOWE3NWZhZjE1MzhiZWY4YmQ3NjdkNTYwYTU5ZDA2MzYmWC1BbXotU2lnbmVkSGVhZGVycz1ob3N0In0.UuHQCgWYkh0OQq9qsUWqGsUbhG3i9jcZDAMeHjLt5T4" controls="controls" muted="muted" class="d-block rounded-bottom-2 border-top width-fit" style="max-height:640px; min-height: 200px"></video>
+- `app/tool/base.py`
+- `app/tool/tool_collection.py`
 
-## Installation
+### 3. 细粒度工具
 
-We provide two installation methods. Method 2 (using uv) is recommended for faster installation and better dependency management.
+- `app/tool/bash.py`
+- `app/tool/browser_use_tool.py`
 
-### Method 1: Using conda
+### 4. 新增观测模块
 
-1. Create a new conda environment:
+- `app/observability/__init__.py`
+- `app/observability/tool_context.py`
+- `app/observability/tracing.py`
+
+---
+
+## 二、当前没有完成插桩的部分
+
+以下内容 **不在当前真实完成范围内**：
+
+- `app/agent/react.py`
+- `app/agent/manus.py`
+- `app/llm.py`
+- 启动入口文件中的 Phoenix / OpenTelemetry 注册逻辑
+  - 例如：`main.py`、`run_flow.py`、`run_mcp.py` 或你实际使用的启动脚本
+
+这意味着当前版本 **没有完成**：
+
+- `ReActAgent.step / think / act` 的独立 span
+- `Manus` 初始化过程的独立 span
+- MCP 动态工具接入过程的独立 span
+- LLM 请求级 span
+- 完整 state / memory 演化链路
+- Phoenix / OTel exporter 的入口注册
+
+---
+
+## 三、当前版本能分析什么
+
+当前补丁主要覆盖下面这条链路：
+
+```text
+agent.run / step
+  -> plan_tools
+  -> tool_call
+  -> tool.dispatch
+  -> tool.execute
+```
+
+基于这条链路，当前版本可以支撑以下分析。
+
+### 1. Step 级执行流程分析
+
+可以观察：
+
+- agent 一共执行了多少轮 step
+- 每一轮 step 是否进入工具规划阶段
+- 哪些 step 真正触发了工具调用
+- 工具调用在 step 之间的分布情况
+
+### 2. 工具调用主链分析
+
+可以观察：
+
+- 规划出了哪些工具调用
+- 工具名称、参数和结果概览
+- 工具分发是否成功
+- 实际由哪个工具类完成执行
+- 调用耗时、异常与成功率
+
+### 3. 关键工具行为分析
+
+当前已经对两类常见高价值工具做了更细的字段增强：
+
+#### Bash
+
+可用于分析：
+
+- agent 是否频繁依赖 shell
+- 命令执行是否失败
+- 输出是否异常膨胀
+- shell 在 workflow 中承担什么角色
+
+#### BrowserUseTool
+
+可用于分析：
+
+- 浏览器工具内部执行了什么动作
+- 是搜索、跳转、点击还是输入
+- 浏览器操作在任务推进中的作用
+
+---
+
+## 四、当前版本不能直接支持什么分析
+
+当前版本 **不适合直接声称支持** 以下分析：
+
+### 1. 完整 agent 内部 workflow 分析
+
+因为尚未拆出：
+
+- `ReActAgent.step`
+- `ReActAgent.think`
+- `ReActAgent.act`
+
+所以当前还不能精确区分：
+
+- 一轮 step 中思考和执行各花了多少时间
+- think 阶段是否出现反复犹豫
+- act 阶段是否执行了多个动作
+- step 为什么在某个时刻结束
+
+### 2. 完整 LLM 调用分析
+
+因为 `app/llm.py` 尚未补齐请求级 span，当前不能直接分析：
+
+- 每轮 think 发起了多少次 LLM 请求
+- prompt / response 延迟
+- tool schema 大小与调用延迟的关系
+- 哪次 LLM 调用触发了具体 tool call
+
+### 3. 完整初始化与动态工具装载分析
+
+因为 `manus.py` 和入口层尚未补齐，当前不能完整分析：
+
+- 默认工具如何装配
+- MCP server 如何初始化
+- MCP 工具在什么时候注入 agent
+- 不同运行模式下工具环境如何形成
+
+### 4. 完整状态与记忆演化分析
+
+当前没有独立插出：
+
+- memory append
+- state transition
+- terminate / finish 原因
+
+因此很难直接回答：
+
+- agent 为什么在第 N 步结束
+- 哪一步写入了关键信息并改变后续策略
+- memory 增长是否导致后续 step 变慢
+
+---
+
+## 五、当前插桩设计
+
+当前补丁采用的是 **主链优先、局部细化** 的设计。
+
+### 1. Agent 逻辑层
+
+在 `app/agent/toolcall.py` 中插入逻辑层 span，用于记录：
+
+- 当前 step
+- 当前工具调用名称
+- 工具参数
+- 工具调用结果概览
+- 调用异常信息
+
+该层负责描述：
+
+> 模型决定调用什么工具，以及工具调用逻辑何时开始。
+
+### 2. Tool 执行层
+
+在 `app/tool/base.py` 中增加统一 `tool.execute` 插桩。
+
+所有通过 `BaseTool` 执行的工具，都会经过这一层。
+
+该层负责描述：
+
+- 具体执行的是哪个工具类
+- 传入参数是什么
+- 执行耗时是多少
+- 是否成功
+- 是否抛出异常
+
+### 3. Tool 分发层
+
+在 `app/tool/tool_collection.py` 中增加 dispatch 级 span。
+
+该层负责描述：
+
+- 工具名如何映射到工具对象
+- 分发是否成功
+- 分发失败原因
+
+### 4. 工具细化层
+
+在 `bash.py` 和 `browser_use_tool.py` 中补充工具特有字段，便于进行动作级分析。
+
+---
+
+## 六、各文件作用说明
+
+### `app/agent/base.py`
+
+负责建立最外层的 step 骨架，当前用于记录：
+
+- `agent.run`
+- `agent.step`
+
+这是整个工具调用链的最外层观察框架。
+
+---
+
+### `app/agent/toolcall.py`
+
+这是当前版本中最关键的文件之一。
+
+主要负责：
+
+- 工具规划阶段的可观测性
+- 工具执行逻辑阶段的可观测性
+
+它把“模型决定调用工具”和“工具真正被执行”连接起来。
+
+---
+
+### `app/tool/base.py`
+
+这是当前版本中最关键的另一个文件。
+
+它为所有 `BaseTool` 子类提供统一执行入口插桩，是最稳定的工具执行观测点。
+
+---
+
+### `app/tool/tool_collection.py`
+
+负责补充工具调度与分发这一层，便于观察：
+
+- 工具名称到工具实例的映射
+- dispatch 成功与否
+- dispatch 侧异常
+
+---
+
+### `app/tool/bash.py`
+
+负责增强 Bash 工具的观测字段，例如：
+
+- command
+- 输出长度
+- 错误信息
+- 执行耗时
+
+适合分析 shell 在 agent workflow 中的角色。
+
+---
+
+### `app/tool/browser_use_tool.py`
+
+负责增强浏览器工具的动作级字段，例如：
+
+- action
+- URL
+- query
+- index
+- 结果概览
+
+适合分析浏览器工具在任务推进中的具体作用。
+
+---
+
+### `app/observability/tool_context.py`
+
+通过上下文变量传递运行期观测上下文，例如：
+
+- 当前 step
+- 当前 tool call
+- agent 运行时的局部上下文
+
+用于把不同层的 span 串联起来。
+
+---
+
+### `app/observability/tracing.py`
+
+用于统一封装 tracing 能力，目标是：
+
+- 减少业务代码与 tracing 细节的耦合
+- 在未配置 OTel 时安全退化
+- 为后续接 Phoenix / OpenTelemetry 做准备
+
+---
+
+## 七、如何把补丁覆盖到仓库中
+
+当前建议只覆盖 **真实有改动** 的文件，不要按更大范围误覆盖。
+
+### 需要覆盖 / 新增的文件
+
+```text
+app/agent/base.py
+app/agent/toolcall.py
+app/tool/base.py
+app/tool/tool_collection.py
+app/tool/bash.py
+app/tool/browser_use_tool.py
+app/observability/__init__.py
+app/observability/tool_context.py
+app/observability/tracing.py
+```
+
+### 示例命令
+
+在 OpenManus 仓库根目录执行：
 
 ```bash
-conda create -n open_manus python=3.12
-conda activate open_manus
+cp /path/to/openmanus_instrumented/app/agent/base.py app/agent/base.py
+cp /path/to/openmanus_instrumented/app/agent/toolcall.py app/agent/toolcall.py
+
+cp /path/to/openmanus_instrumented/app/tool/base.py app/tool/base.py
+cp /path/to/openmanus_instrumented/app/tool/tool_collection.py app/tool/tool_collection.py
+cp /path/to/openmanus_instrumented/app/tool/bash.py app/tool/bash.py
+cp /path/to/openmanus_instrumented/app/tool/browser_use_tool.py app/tool/browser_use_tool.py
+
+mkdir -p app/observability
+cp /path/to/openmanus_instrumented/app/observability/__init__.py app/observability/__init__.py
+cp /path/to/openmanus_instrumented/app/observability/tool_context.py app/observability/tool_context.py
+cp /path/to/openmanus_instrumented/app/observability/tracing.py app/observability/tracing.py
 ```
 
-2. Clone the repository:
+---
 
-```bash
-git clone https://github.com/FoundationAgents/OpenManus.git
-cd OpenManus
-```
+## 八、当前版本与 Phoenix / OTel 的关系
 
-3. Install dependencies:
+当前补丁的本质是：
 
-```bash
-pip install -r requirements.txt
-```
+> **把埋点代码写进 OpenManus 的核心调用链中。**
 
-### Method 2: Using uv (Recommended)
+但这还不等于你一定能在 Phoenix 中看到完整 trace。
 
-1. Install uv (A fast Python package installer and resolver):
+原因是：
 
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
+- 当前版本主要完成了 **内部 span 埋点**
+- 还没有完成 **启动入口中的 OTel / Phoenix exporter 注册**
 
-2. Clone the repository:
+如果入口没有注册 exporter，则可能出现：
 
-```bash
-git clone https://github.com/FoundationAgents/OpenManus.git
-cd OpenManus
-```
+- span 退化为 no-op
+- 代码里看起来有埋点，但 Phoenix 里没有 trace
+- trace 树不完整
 
-3. Create a new virtual environment and activate it:
+因此，如果你要真正接 Phoenix，还需要继续补：
 
-```bash
-uv venv --python 3.12
-source .venv/bin/activate  # On Unix/macOS
-# Or on Windows:
-# .venv\Scripts\activate
-```
+- `main.py`
+- `run_flow.py`
+- `run_mcp.py`
+- 或你实际使用的启动脚本
 
-4. Install dependencies:
+使程序在启动时完成：
 
-```bash
-uv pip install -r requirements.txt
-```
+- tracer provider 初始化
+- OTLP exporter 注册
+- service name 配置
+- endpoint 配置
 
-### Browser Automation Tool (Optional)
-```bash
-playwright install
-```
+---
 
-## Configuration
+## 九、建议如何描述当前版本
 
-OpenManus requires configuration for the LLM APIs it uses. Follow these steps to set up your configuration:
+### 建议表述
 
-1. Create a `config.toml` file in the `config` directory (you can copy from the example):
+建议把当前版本描述为：
 
-```bash
-cp config/config.example.toml config/config.toml
-```
+> **OpenManus 工具调用主链插桩**
+> 对 step、tool planning、tool dispatch 和 tool execute 过程进行了可观测性增强，
+> 可用于分析 OpenManus 的工具主导型执行 workflow。
 
-2. Edit `config/config.toml` to add your API keys and customize settings:
+### 不建议表述
 
-```toml
-# Global LLM configuration
-[llm]
-model = "gpt-4o"
-base_url = "https://api.openai.com/v1"
-api_key = "sk-..."  # Replace with your actual API key
-max_tokens = 4096
-temperature = 0.0
+不建议直接表述为：
 
-# Optional configuration for specific LLM models
-[llm.vision]
-model = "gpt-4o"
-base_url = "https://api.openai.com/v1"
-api_key = "sk-..."  # Replace with your actual API key
-```
+> **OpenManus 完整 agent workflow tracing**
 
-## Quick Start
+因为当前尚未覆盖完整 agent 内部全链路。
 
-One line for run OpenManus:
+---
 
-```bash
-python main.py
-```
+## 十、下一步建议
 
-Then input your idea via terminal!
+如果要把当前版本扩展为“完整 agent 内部全链路插桩”，建议按以下顺序继续补：
 
-For MCP tool version, you can run:
-```bash
-python run_mcp.py
-```
+### 第一优先级
 
-For unstable multi-agent version, you also can run:
+1. `app/agent/react.py`
+   - `step`
+   - `think`
+   - `act`
 
-```bash
-python run_flow.py
-```
+2. `app/llm.py`
+   - 请求级 span
+   - latency / message size / token 信息
 
-### Custom Adding Multiple Agents
+### 第二优先级
 
-Currently, besides the general OpenManus Agent, we have also integrated the DataAnalysis Agent, which is suitable for data analysis and data visualization tasks. You can add this agent to `run_flow` in `config.toml`.
+1. `app/agent/manus.py`
+   - 默认工具装配
+   - MCP 初始化
+   - 动态工具注入
 
-```toml
-# Optional configuration for run-flow
-[runflow]
-use_data_analysis_agent = true     # Disabled by default, change to true to activate
-```
-In addition, you need to install the relevant dependencies to ensure the agent runs properly: [Detailed Installation Guide](app/tool/chart_visualization/README.md##Installation)
+2. state / memory 相关链路
+   - memory append
+   - terminate / finish 原因
+   - 状态切换
 
-## How to contribute
+### 第三优先级
 
-We welcome any friendly suggestions and helpful contributions! Just create issues or submit pull requests.
+1. 启动入口
+   - Phoenix / OpenTelemetry 注册
+   - exporter 配置
+   - service name 配置
 
-Or contact @mannaandpoem via 📧email: mannaandpoem@gmail.com
+---
 
-**Note**: Before submitting a pull request, please use the pre-commit tool to check your changes. Run `pre-commit run --all-files` to execute the checks.
+## 十一、一句话总结
 
-## Community Group
-Join our networking group on Feishu and share your experience with other developers!
+当前补丁已经能够支持你分析 **OpenManus 的工具调用主链 workflow**，尤其适合做：
 
-<div align="center" style="display: flex; gap: 20px;">
-    <img src="assets/community_group.jpg" alt="OpenManus 交流群" width="300" />
-</div>
+- step 级粗粒度流程分析
+- 工具调用序列分析
+- Bash / Browser 等关键工具行为分析
 
-## Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=FoundationAgents/OpenManus&type=Date)](https://star-history.com/#FoundationAgents/OpenManus&Date)
-
-## Sponsors
-Thanks to [PPIO](https://ppinfra.com/user/register?invited_by=OCPKCN&utm_source=github_openmanus&utm_medium=github_readme&utm_campaign=link) for computing source support.
-> PPIO: The most affordable and easily-integrated MaaS and GPU cloud solution.
-
-
-## Acknowledgement
-
-Thanks to [anthropic-computer-use](https://github.com/anthropics/anthropic-quickstarts/tree/main/computer-use-demo), [browser-use](https://github.com/browser-use/browser-use) and [crawl4ai](https://github.com/unclecode/crawl4ai) for providing basic support for this project!
-
-Additionally, we are grateful to [AAAJ](https://github.com/metauto-ai/agent-as-a-judge), [MetaGPT](https://github.com/geekan/MetaGPT), [OpenHands](https://github.com/All-Hands-AI/OpenHands) and [SWE-agent](https://github.com/SWE-agent/SWE-agent).
-
-We also thank stepfun(阶跃星辰) for supporting our Hugging Face demo space.
-
-OpenManus is built by contributors from MetaGPT. Huge thanks to this agent community!
-
-## Cite
-```bibtex
-@misc{openmanus2025,
-  author = {Xinbin Liang and Jinyu Xiang and Zhaoyang Yu and Jiayi Zhang and Sirui Hong and Sheng Fan and Xiao Tang and Bang Liu and Yuyu Luo and Chenglin Wu},
-  title = {OpenManus: An open-source framework for building general AI agents},
-  year = {2025},
-  publisher = {Zenodo},
-  doi = {10.5281/zenodo.15186407},
-  url = {https://doi.org/10.5281/zenodo.15186407},
-}
-```
+但它还不足以支撑 **完整 agent 内部 workflow tracing**。
