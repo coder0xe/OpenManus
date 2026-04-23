@@ -3,7 +3,11 @@ from typing import Any, Dict, List
 
 from app.exceptions import ToolError
 from app.logger import logger
+from app.observability.tracing import get_tracer, record_exception, result_to_attributes, safe_json_dumps, set_span_attributes
 from app.tool.base import BaseTool, ToolFailure, ToolResult
+
+
+TRACER = get_tracer(__name__)
 
 
 class ToolCollection:
@@ -25,14 +29,33 @@ class ToolCollection:
     async def execute(
         self, *, name: str, tool_input: Dict[str, Any] = None
     ) -> ToolResult:
-        tool = self.tool_map.get(name)
-        if not tool:
-            return ToolFailure(error=f"Tool {name} is invalid")
-        try:
-            result = await tool(**tool_input)
-            return result
-        except ToolError as e:
-            return ToolFailure(error=e.message)
+        tool_input = tool_input or {}
+        with TRACER.start_as_current_span("tool.dispatch") as span:
+            set_span_attributes(
+                span,
+                {
+                    "tool.name": name,
+                    "tool.dispatch.input": safe_json_dumps(tool_input),
+                    "tool.dispatch.input_keys": sorted(tool_input.keys()),
+                    "tool.dispatch.tool_exists": name in self.tool_map,
+                },
+            )
+            tool = self.tool_map.get(name)
+            if not tool:
+                result = ToolFailure(error=f"Tool {name} is invalid")
+                set_span_attributes(span, result_to_attributes(result, prefix="tool.dispatch.result"))
+                return result
+            try:
+                result = await tool(**tool_input)
+                set_span_attributes(span, result_to_attributes(result, prefix="tool.dispatch.result"))
+                return result
+            except ToolError as e:
+                result = ToolFailure(error=e.message)
+                set_span_attributes(span, result_to_attributes(result, prefix="tool.dispatch.result"))
+                return result
+            except Exception as exc:
+                record_exception(span, exc)
+                raise
 
     async def execute_all(self) -> List[ToolResult]:
         """Execute all tools in the collection sequentially."""

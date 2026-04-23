@@ -1,13 +1,19 @@
 from abc import ABC, abstractmethod
 from contextlib import asynccontextmanager
+import time
 from typing import List, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
 from app.llm import LLM
 from app.logger import logger
+from app.observability.tool_context import bind_trace_context
+from app.observability.tracing import get_tracer, preview_text, record_exception, set_span_attributes
 from app.sandbox.client import SANDBOX_CLIENT
 from app.schema import ROLE_TYPE, AgentState, Memory, Message
+
+
+TRACER = get_tracer(__name__)
 
 
 class BaseAgent(BaseModel, ABC):
@@ -128,30 +134,87 @@ class BaseAgent(BaseModel, ABC):
         if self.state != AgentState.IDLE:
             raise RuntimeError(f"Cannot run agent from state: {self.state}")
 
-        if request:
-            self.update_memory("user", request)
+        started_at = time.perf_counter()
+        with bind_trace_context(agent_name=self.name), TRACER.start_as_current_span("agent.run") as run_span:
+            set_span_attributes(
+                run_span,
+                {
+                    "agent.name": self.name,
+                    "agent.description": self.description,
+                    "agent.max_steps": self.max_steps,
+                    "agent.initial_state": getattr(self.state, "value", str(self.state)),
+                    "agent.request_present": bool(request),
+                    "agent.request_preview": preview_text(request),
+                },
+            )
+            try:
+                if request:
+                    self.update_memory("user", request)
 
-        results: List[str] = []
-        async with self.state_context(AgentState.RUNNING):
-            while (
-                self.current_step < self.max_steps and self.state != AgentState.FINISHED
-            ):
-                self.current_step += 1
-                logger.info(f"Executing step {self.current_step}/{self.max_steps}")
-                step_result = await self.step()
+                results: List[str] = []
+                async with self.state_context(AgentState.RUNNING):
+                    while (
+                        self.current_step < self.max_steps and self.state != AgentState.FINISHED
+                    ):
+                        self.current_step += 1
+                        logger.info(f"Executing step {self.current_step}/{self.max_steps}")
 
-                # Check for stuck state
-                if self.is_stuck():
-                    self.handle_stuck_state()
+                        step_started_at = time.perf_counter()
+                        with bind_trace_context(agent_name=self.name, agent_step=self.current_step), TRACER.start_as_current_span("agent.step") as step_span:
+                            set_span_attributes(
+                                step_span,
+                                {
+                                    "agent.name": self.name,
+                                    "agent.step": self.current_step,
+                                    "agent.max_steps": self.max_steps,
+                                    "agent.state_before_step": getattr(self.state, "value", str(self.state)),
+                                },
+                            )
+                            try:
+                                step_result = await self.step()
+                            except Exception as exc:
+                                record_exception(step_span, exc)
+                                set_span_attributes(
+                                    step_span,
+                                    {
+                                        "agent.step.duration_ms": round((time.perf_counter() - step_started_at) * 1000, 3),
+                                    },
+                                )
+                                raise
+                            set_span_attributes(
+                                step_span,
+                                {
+                                    "agent.step.duration_ms": round((time.perf_counter() - step_started_at) * 1000, 3),
+                                    "agent.step.result_preview": preview_text(step_result),
+                                    "agent.state_after_step": getattr(self.state, "value", str(self.state)),
+                                    "agent.memory_size": len(self.memory.messages),
+                                },
+                            )
 
-                results.append(f"Step {self.current_step}: {step_result}")
+                        # Check for stuck state
+                        if self.is_stuck():
+                            self.handle_stuck_state()
 
-            if self.current_step >= self.max_steps:
-                self.current_step = 0
-                self.state = AgentState.IDLE
-                results.append(f"Terminated: Reached max steps ({self.max_steps})")
-        await SANDBOX_CLIENT.cleanup()
-        return "\n".join(results) if results else "No steps executed"
+                        results.append(f"Step {self.current_step}: {step_result}")
+
+                    if self.current_step >= self.max_steps:
+                        self.current_step = 0
+                        self.state = AgentState.IDLE
+                        results.append(f"Terminated: Reached max steps ({self.max_steps})")
+                return "\n".join(results) if results else "No steps executed"
+            except Exception as exc:
+                record_exception(run_span, exc)
+                raise
+            finally:
+                set_span_attributes(
+                    run_span,
+                    {
+                        "agent.final_state": getattr(self.state, "value", str(self.state)),
+                        "agent.total_duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
+                        "agent.total_messages": len(self.memory.messages),
+                    },
+                )
+                await SANDBOX_CLIENT.cleanup()
 
     @abstractmethod
     async def step(self) -> str:
@@ -162,8 +225,7 @@ class BaseAgent(BaseModel, ABC):
 
     def handle_stuck_state(self):
         """Handle stuck state by adding a prompt to change strategy"""
-        stuck_prompt = "\
-        Observed duplicate responses. Consider new strategies and avoid repeating ineffective paths already attempted."
+        stuck_prompt = "        Observed duplicate responses. Consider new strategies and avoid repeating ineffective paths already attempted."
         self.next_step_prompt = f"{stuck_prompt}\n{self.next_step_prompt}"
         logger.warning(f"Agent detected stuck state. Added prompt: {stuck_prompt}")
 

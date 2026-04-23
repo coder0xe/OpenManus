@@ -12,6 +12,7 @@ from pydantic_core.core_schema import ValidationInfo
 
 from app.config import config
 from app.llm import LLM
+from app.observability.tracing import result_to_attributes, traced_async
 from app.tool.base import BaseTool, ToolResult
 from app.tool.web_search import WebSearch
 
@@ -34,6 +35,40 @@ Note: When using element indices, refer to the numbered elements shown in the cu
 """
 
 Context = TypeVar("Context")
+
+
+def _browser_action_attrs(
+    self,
+    action: str,
+    url: Optional[str] = None,
+    index: Optional[int] = None,
+    text: Optional[str] = None,
+    scroll_amount: Optional[int] = None,
+    tab_id: Optional[int] = None,
+    query: Optional[str] = None,
+    goal: Optional[str] = None,
+    keys: Optional[str] = None,
+    seconds: Optional[int] = None,
+    **kwargs,
+):
+    return {
+        "browser.action": action,
+        "browser.url": url,
+        "browser.index": index,
+        "browser.text": text,
+        "browser.scroll_amount": scroll_amount,
+        "browser.tab_id": tab_id,
+        "browser.query": query,
+        "browser.goal": goal,
+        "browser.keys": keys,
+        "browser.seconds": seconds,
+    }
+
+
+def _browser_result_attrs(result: ToolResult):
+    attrs = result_to_attributes(result, prefix="browser.result")
+    attrs["browser.result.success"] = not bool(result.error)
+    return attrs
 
 
 class BrowserUseTool(BaseTool, Generic[Context]):
@@ -187,6 +222,7 @@ class BrowserUseTool(BaseTool, Generic[Context]):
 
         return self.context
 
+    @traced_async("browser.action", attr_getter=_browser_action_attrs, result_getter=_browser_result_attrs)
     async def execute(
         self,
         action: str,

@@ -3,14 +3,34 @@ import os
 from typing import Optional
 
 from app.exceptions import ToolError
+from app.observability.tracing import get_tracer, result_to_attributes, set_span_attributes, traced_async
 from app.tool.base import BaseTool, CLIResult
 
 
+TRACER = get_tracer(__name__)
 _BASH_DESCRIPTION = """Execute a bash command in the terminal.
 * Long running commands: For commands that may run indefinitely, it should be run in the background and the output should be redirected to a file, e.g. command = `python3 app.py > server.log 2>&1 &`.
 * Interactive: If a bash command returns exit code `-1`, this means the process is not yet finished. The assistant must then send a second call to terminal with an empty `command` (which will retrieve any additional logs), or it can send additional text (set `command` to the text) to STDIN of the running process, or it can send command=`ctrl+c` to interrupt the process.
 * Timeout: If a command execution result says "Command timed out. Sending SIGINT to the process", the assistant should retry running the command in the background.
 """
+
+
+def _bash_run_attrs(self, command: str):
+    process = getattr(self, "_process", None)
+    return {
+        "bash.command": command,
+        "bash.timeout_sec": self._timeout,
+        "bash.output_delay_sec": self._output_delay,
+        "bash.pid": process.pid if process else None,
+        "bash.started": self._started,
+    }
+
+
+def _bash_run_result_attrs(result: CLIResult):
+    attrs = result_to_attributes(result, prefix="bash.result")
+    attrs["bash.result.stdout_len"] = len(result.output) if result and result.output else 0
+    attrs["bash.result.stderr_len"] = len(result.error) if result and result.error else 0
+    return attrs
 
 
 class _BashSession:
@@ -32,17 +52,25 @@ class _BashSession:
         if self._started:
             return
 
-        self._process = await asyncio.create_subprocess_shell(
-            self.command,
-            preexec_fn=os.setsid,
-            shell=True,
-            bufsize=0,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-
-        self._started = True
+        with TRACER.start_as_current_span("bash.session.start") as span:
+            self._process = await asyncio.create_subprocess_shell(
+                self.command,
+                preexec_fn=os.setsid,
+                shell=True,
+                bufsize=0,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            self._started = True
+            set_span_attributes(
+                span,
+                {
+                    "bash.command": self.command,
+                    "bash.pid": self._process.pid,
+                    "bash.started": self._started,
+                },
+            )
 
     def stop(self):
         """Terminate the bash shell."""
@@ -52,6 +80,7 @@ class _BashSession:
             return
         self._process.terminate()
 
+    @traced_async("bash.session.run", attr_getter=_bash_run_attrs, result_getter=_bash_run_result_attrs)
     async def run(self, command: str):
         """Execute a command in the bash shell."""
         if not self._started:
@@ -66,29 +95,21 @@ class _BashSession:
                 f"timed out: bash has not returned in {self._timeout} seconds and must be restarted",
             )
 
-        # we know these are not None because we created the process with PIPEs
         assert self._process.stdin
         assert self._process.stdout
         assert self._process.stderr
 
-        # send command to the process
         self._process.stdin.write(
             command.encode() + f"; echo '{self._sentinel}'\n".encode()
         )
         await self._process.stdin.drain()
 
-        # read output from the process, until the sentinel is found
         try:
             async with asyncio.timeout(self._timeout):
                 while True:
                     await asyncio.sleep(self._output_delay)
-                    # if we read directly from stdout/stderr, it will wait forever for
-                    # EOF. use the StreamReader buffer directly instead.
-                    output = (
-                        self._process.stdout._buffer.decode()
-                    )  # pyright: ignore[reportAttributeAccessIssue]
+                    output = self._process.stdout._buffer.decode()  # pyright: ignore[reportAttributeAccessIssue]
                     if self._sentinel in output:
-                        # strip the sentinel and break
                         output = output[: output.index(self._sentinel)]
                         break
         except asyncio.TimeoutError:
@@ -100,13 +121,10 @@ class _BashSession:
         if output.endswith("\n"):
             output = output[:-1]
 
-        error = (
-            self._process.stderr._buffer.decode()
-        )  # pyright: ignore[reportAttributeAccessIssue]
+        error = self._process.stderr._buffer.decode()  # pyright: ignore[reportAttributeAccessIssue]
         if error.endswith("\n"):
             error = error[:-1]
 
-        # clear the buffers so that the next output can be read correctly
         self._process.stdout._buffer.clear()  # pyright: ignore[reportAttributeAccessIssue]
         self._process.stderr._buffer.clear()  # pyright: ignore[reportAttributeAccessIssue]
 
@@ -114,7 +132,7 @@ class _BashSession:
 
 
 class Bash(BaseTool):
-    """A tool for executing bash commands"""
+    """A tool for executing bash commands."""
 
     name: str = "bash"
     description: str = _BASH_DESCRIPTION
@@ -139,7 +157,6 @@ class Bash(BaseTool):
                 self._session.stop()
             self._session = _BashSession()
             await self._session.start()
-
             return CLIResult(system="tool has been restarted.")
 
         if self._session is None:
