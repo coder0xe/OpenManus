@@ -3,7 +3,7 @@ import threading
 import tomllib
 from pathlib import Path
 from typing import Dict, List, Optional
-
+from typing import Optional
 from pydantic import BaseModel, Field
 
 
@@ -106,7 +106,7 @@ class SandboxSettings(BaseModel):
 
 
 class DaytonaSettings(BaseModel):
-    daytona_api_key: str
+    daytona_api_key: Optional[str] = None
     daytona_server_url: Optional[str] = Field(
         "https://app.daytona.io/api", description=""
     )
@@ -294,7 +294,7 @@ class Config:
         if daytona_config:
             daytona_settings = DaytonaSettings(**daytona_config)
         else:
-            daytona_settings = DaytonaSettings()
+            daytona_settings = None
 
         mcp_config = raw_config.get("mcp", {})
         mcp_settings = None
